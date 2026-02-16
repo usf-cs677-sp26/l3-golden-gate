@@ -60,19 +60,27 @@ func (m *MessageHandler) Send(wrapper *Wrapper) error {
 
 	prefix := make([]byte, 8)
 	binary.LittleEndian.PutUint64(prefix, uint64(len(serialized)))
-	m.WriteN(prefix)
-	m.WriteN(serialized)
+	if err := m.WriteN(prefix); err != nil {
+		return err
+	}
+	if err := m.WriteN(serialized); err != nil {
+		return err
+	}
 
 	return nil
 }
 
 func (m *MessageHandler) Receive() (*Wrapper, error) {
 	prefix := make([]byte, 8)
-	m.ReadN(prefix)
+	if err := m.ReadN(prefix); err != nil {
+		return nil, err
+	}
 
 	payloadSize := binary.LittleEndian.Uint64(prefix)
 	payload := make([]byte, payloadSize)
-	m.ReadN(payload)
+	if err := m.ReadN(payload); err != nil {
+		return nil, err
+	}
 
 	wrapper := &Wrapper{}
 	err := proto.Unmarshal(payload, wrapper)
@@ -83,8 +91,9 @@ func (m *MessageHandler) Close() {
 	m.conn.Close()
 }
 
-func (m *MessageHandler) SendStorageRequest(fileName string, size uint64) error {
-	msg := StorageRequest{FileName: fileName, Size: size}
+// CHANGE: include checksum metadata in storage request.
+func (m *MessageHandler) SendStorageRequest(fileName string, size uint64, checksum []byte) error {
+	msg := StorageRequest{FileName: fileName, Size: size, Checksum: checksum}
 	wrapper := &Wrapper{
 		Msg: &Wrapper_StorageReq{StorageReq: &msg},
 	}
@@ -116,9 +125,10 @@ func (m *MessageHandler) SendResponse(ok bool, str string) error {
 	return m.Send(wrapper)
 }
 
-func (m *MessageHandler) SendRetrievalResponse(ok bool, str string, size uint64) error {
+// CHANGE: include checksum metadata in retrieval response.
+func (m *MessageHandler) SendRetrievalResponse(ok bool, str string, size uint64, checksum []byte) error {
 	resp := Response{Ok: ok, Message: str}
-	msg := RetrievalResponse{Resp: &resp, Size: size}
+	msg := RetrievalResponse{Resp: &resp, Size: size, Checksum: checksum}
 	wrapper := &Wrapper{
 		Msg: &Wrapper_RetrievalResp{RetrievalResp: &msg},
 	}
@@ -132,17 +142,30 @@ func (m *MessageHandler) ReceiveResponse() (bool, string) {
 		return false, ""
 	}
 
-	log.Println(resp.GetResponse().Message)
-	return resp.GetResponse().Ok, resp.GetResponse().Message
-}
-
-func (m *MessageHandler) ReceiveRetrievalResponse() (bool, string, uint64) {
-	resp, err := m.Receive()
-	if err != nil {
-		return false, "", 0
+	response := resp.GetResponse()
+	if response == nil {
+		log.Println("Expected Response but received a different message type")
+		return false, ""
 	}
 
-	rr := resp.GetRetrievalResp().GetResp()
+	log.Println(response.Message)
+	return response.Ok, response.Message
+}
+
+// CHANGE: return checksum metadata that arrives before streamed file bytes.
+func (m *MessageHandler) ReceiveRetrievalResponse() (bool, string, uint64, []byte) {
+	resp, err := m.Receive()
+	if err != nil {
+		return false, "", 0, nil
+	}
+
+	retrievalResp := resp.GetRetrievalResp()
+	if retrievalResp == nil || retrievalResp.GetResp() == nil {
+		log.Println("Expected RetrievalResponse but received a different message type")
+		return false, "", 0, nil
+	}
+
+	rr := retrievalResp.GetResp()
 	log.Println(rr.Message)
-	return rr.Ok, rr.Message, resp.GetRetrievalResp().Size
+	return rr.Ok, rr.Message, retrievalResp.Size, retrievalResp.Checksum
 }

@@ -9,54 +9,105 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"syscall"
 )
 
+func ensureEnoughDiskSpace(path string, needed uint64) error {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return err
+	}
+
+	available := stat.Bavail * uint64(stat.Bsize)
+	if available < needed {
+		return fmt.Errorf("not enough disk space: need %d bytes, available %d bytes", needed, available)
+	}
+
+	return nil
+}
+
 func handleStorage(msgHandler *messages.MessageHandler, request *messages.StorageRequest) {
-	log.Println("Attempting to store", request.FileName)
-	file, err := os.OpenFile(request.FileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
-	if err != nil {
+	fileName := filepath.Base(request.FileName)
+	log.Println("Attempting to store", fileName)
+
+	if err := ensureEnoughDiskSpace(".", request.Size); err != nil {
 		msgHandler.SendResponse(false, err.Error())
-		msgHandler.Close()
 		return
 	}
+
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	if err != nil {
+		msgHandler.SendResponse(false, err.Error())
+		return
+	}
+	defer file.Close()
 
 	msgHandler.SendResponse(true, "Ready for data")
 	md5 := md5.New()
 	w := io.MultiWriter(file, md5)
-	io.CopyN(w, msgHandler, int64(request.Size)) /* Write and checksum as we go */
-	file.Close()
+	if _, err := io.CopyN(w, msgHandler, int64(request.Size)); err != nil {
+		_ = os.Remove(fileName)
+		msgHandler.SendResponse(false, fmt.Sprintf("failed receiving file data: %v", err))
+		return
+	}
 
-	serverCheck := md5.Sum(nil)
-
-	clientCheckMsg, _ := msgHandler.Receive()
-	clientCheck := clientCheckMsg.GetChecksum().Checksum
-
-	if util.VerifyChecksum(serverCheck, clientCheck) {
+	// CHANGE: verify checksum from PUT metadata; no post-stream checksum message.
+	serverChecksum := md5.Sum(nil)
+	if util.VerifyChecksum(serverChecksum, request.Checksum) {
 		log.Println("Successfully stored file.")
+		msgHandler.SendResponse(true, "Storage complete")
 	} else {
 		log.Println("FAILED to store file. Invalid checksum.")
+		_ = os.Remove(fileName)
+		msgHandler.SendResponse(false, "Checksum mismatch")
 	}
 }
 
 func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.RetrievalRequest) {
-	log.Println("Attempting to retrieve", request.FileName)
+	fileName := filepath.Base(request.FileName)
+	log.Println("Attempting to retrieve", fileName)
 
-	// Get file size and make sure it exists
-	info, err := os.Stat(request.FileName)
+	// CHANGE: open file first so we never send OK then fail.
+	file, err := os.Open(fileName)
 	if err != nil {
-		log.Fatalln(err)
+		_ = msgHandler.SendRetrievalResponse(false, "File not found", 0, nil)
+		return
+	}
+	defer file.Close()
+
+	// CHANGE: stat after opening.
+	info, err := file.Stat()
+	if err != nil {
+		log.Println("failed to stat file:", err)
+		return
 	}
 
-	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()))
+	// CHANGE: compute checksum before sending retrieval metadata.
+	h := md5.New()
+	if _, err := io.Copy(h, file); err != nil {
+		log.Println("failed to hash file:", err)
+		return
+	}
+	checksum := h.Sum(nil)
 
-	file, _ := os.Open(request.FileName)
-	md5 := md5.New()
-	w := io.MultiWriter(msgHandler, md5)
-	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
-	file.Close()
+	// CHANGE: rewind for streaming after checksum pass.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		log.Println("failed to rewind file:", err)
+		return
+	}
 
-	checksum := md5.Sum(nil)
-	msgHandler.SendChecksumVerification(checksum)
+	// CHANGE: include checksum metadata in retrieval response.
+	if err := msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()), checksum); err != nil {
+		log.Println("failed to send retrieval response:", err)
+		return
+	}
+
+	// CHANGE: stream raw bytes only; no post-stream checksum message.
+	if _, err := io.CopyN(msgHandler, file, info.Size()); err != nil {
+		log.Println("failed streaming file:", err)
+		return
+	}
 }
 
 func handleClient(msgHandler *messages.MessageHandler) {
@@ -66,15 +117,14 @@ func handleClient(msgHandler *messages.MessageHandler) {
 		wrapper, err := msgHandler.Receive()
 		if err != nil {
 			log.Println(err)
+			return
 		}
 
 		switch msg := wrapper.Msg.(type) {
 		case *messages.Wrapper_StorageReq:
 			handleStorage(msgHandler, msg.StorageReq)
-			continue
 		case *messages.Wrapper_RetrievalReq:
 			handleRetrieval(msgHandler, msg.RetrievalReq)
-			continue
 		case nil:
 			log.Println("Received an empty message, terminating client")
 			return
@@ -101,6 +151,9 @@ func main() {
 	dir := "."
 	if len(os.Args) >= 3 {
 		dir = os.Args[2]
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Fatalln(err)
 	}
 	if err := os.Chdir(dir); err != nil {
 		log.Fatalln(err)

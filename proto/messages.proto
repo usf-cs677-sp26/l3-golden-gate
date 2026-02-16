@@ -2,8 +2,10 @@ syntax = "proto3";
 option go_package = "./messages";
 
 message StorageRequest {
+    // CHANGE: include checksum metadata in PUT request before data-plane bytes.
     string file_name = 1;
     uint64 size = 2;
+    bytes checksum = 3;
 }
 
 message RetrievalRequest {
@@ -20,8 +22,10 @@ message Response {
 }
 
 message RetrievalResponse {
+    // CHANGE: include checksum metadata in GET response before data-plane bytes.
     Response resp = 1;
     uint64 size = 2;
+    bytes checksum = 3;
 }
 
 message Wrapper {

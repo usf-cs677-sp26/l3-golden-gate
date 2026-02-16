@@ -9,8 +9,24 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
+
+// CHANGE: compute PUT checksum before sending metadata request.
+func computeFileChecksum(fileName string) ([]byte, error) {
+	f, err := os.Open(fileName)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
+}
 
 func put(msgHandler *messages.MessageHandler, fileName string) int {
 	fmt.Println("PUT", fileName)
@@ -18,23 +34,38 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	// Get file size and make sure it exists
 	info, err := os.Stat(fileName)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
+		return 1
 	}
 
-	// Tell the server we want to store this file
-	msgHandler.SendStorageRequest(fileName, uint64(info.Size()))
+	// CHANGE: include checksum in metadata before sending PUT bytes.
+	checksum, err := computeFileChecksum(fileName)
+	if err != nil {
+		log.Println(err)
+		return 1
+	}
+
+	if err := msgHandler.SendStorageRequest(filepath.Base(fileName), uint64(info.Size()), checksum); err != nil {
+		log.Println(err)
+		return 1
+	}
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
 
-	file, _ := os.Open(fileName)
-	md5 := md5.New()
-	w := io.MultiWriter(msgHandler, md5)
-	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
-	file.Close()
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Println(err)
+		return 1
+	}
+	defer file.Close()
 
-	checksum := md5.Sum(nil)
-	msgHandler.SendChecksumVerification(checksum)
+	// CHANGE: stream bytes directly and rely on final server response.
+	if _, err := io.CopyN(msgHandler, file, info.Size()); err != nil {
+		log.Println(err)
+		return 1
+	}
+
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
@@ -43,37 +74,49 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	return 0
 }
 
-func get(msgHandler *messages.MessageHandler, fileName string) int {
+func get(msgHandler *messages.MessageHandler, fileName string, destinationDir string) int {
 	fmt.Println("GET", fileName)
 
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	remoteName := filepath.Base(fileName)
+	if err := msgHandler.SendRetrievalRequest(remoteName); err != nil {
+		log.Println(err)
+		return 1
+	}
+	// CHANGE: retrieval metadata now includes message + checksum.
+	ok, msg, size, expectedChecksum := msgHandler.ReceiveRetrievalResponse()
+	if !ok {
+		log.Println(msg)
+		return 1
+	}
+
+	outputPath := filepath.Join(destinationDir, remoteName)
+	file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Println(err)
 		return 1
 	}
+	defer file.Close()
 
-	msgHandler.SendRetrievalRequest(fileName)
-	ok, _, size := msgHandler.ReceiveRetrievalResponse()
-	if !ok {
+	// CHANGE: compute client checksum while streaming bytes to disk.
+	md5 := md5.New()
+	w := io.MultiWriter(file, md5)
+	if _, err := io.CopyN(w, msgHandler, int64(size)); err != nil {
+		log.Println(err)
+		_ = os.Remove(outputPath)
 		return 1
 	}
 
-	md5 := md5.New()
-	w := io.MultiWriter(file, md5)
-	io.CopyN(w, msgHandler, int64(size))
-	file.Close()
-
+	// CHANGE: verify against checksum from retrieval metadata; no trailing checksum message.
 	clientCheck := md5.Sum(nil)
-	checkMsg, _ := msgHandler.Receive()
-	serverCheck := checkMsg.GetChecksum().Checksum
-
-	if util.VerifyChecksum(serverCheck, clientCheck) {
-		log.Println("Successfully retrieved file.")
+	if util.VerifyChecksum(expectedChecksum, clientCheck) {
+		log.Println("Successfully retrieved file:", outputPath)
+		return 0
 	} else {
+		// CHANGE: remove output file on checksum mismatch.
 		log.Println("FAILED to retrieve file. Invalid checksum.")
+		_ = os.Remove(outputPath)
+		return 1
 	}
-
-	return 0
 }
 
 func main() {
@@ -98,19 +141,22 @@ func main() {
 
 	fileName := os.Args[3]
 
-	dir := "."
-	if len(os.Args) >= 5 {
-		dir = os.Args[4]
-	}
-	openDir, err := os.Open(dir)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	openDir.Close()
-
 	if action == "put" {
 		os.Exit(put(msgHandler, fileName))
 	} else if action == "get" {
-		os.Exit(get(msgHandler, fileName))
+		destinationDir := "."
+		if len(os.Args) >= 5 {
+			destinationDir = os.Args[4]
+		}
+
+		info, err := os.Stat(destinationDir)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		if !info.IsDir() {
+			log.Fatalln("destination is not a directory:", destinationDir)
+		}
+
+		os.Exit(get(msgHandler, fileName, destinationDir))
 	}
 }
