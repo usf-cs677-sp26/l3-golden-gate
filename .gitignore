@@ -1,0 +1,4 @@
+bin/
+client/client
+server/server
+.DS_Store
