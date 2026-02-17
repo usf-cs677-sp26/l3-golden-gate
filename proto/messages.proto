@@ -4,6 +4,7 @@ option go_package = "./messages";
 message StorageRequest {
     string file_name = 1;
     uint64 size = 2;
+    bytes checksum = 3;
 }
 
 message RetrievalRequest {
@@ -22,6 +23,7 @@ message Response {
 message RetrievalResponse {
     Response resp = 1;
     uint64 size = 2;
+    bytes checksum = 3;
 }
 
 message Wrapper {

@@ -87,8 +87,8 @@ func (m *MessageHandler) Close() {
 	m.conn.Close()
 }
 
-func (m *MessageHandler) SendStorageRequest(fileName string, size uint64) error {
-	msg := StorageRequest{FileName: fileName, Size: size}
+func (m *MessageHandler) SendStorageRequest(fileName string, size uint64, checksum []byte) error {
+	msg := StorageRequest{FileName: fileName, Size: size, Checksum: checksum}
 	wrapper := &Wrapper{
 		Msg: &Wrapper_StorageReq{StorageReq: &msg},
 	}
@@ -120,9 +120,9 @@ func (m *MessageHandler) SendResponse(ok bool, str string) error {
 	return m.Send(wrapper)
 }
 
-func (m *MessageHandler) SendRetrievalResponse(ok bool, str string, size uint64) error {
+func (m *MessageHandler) SendRetrievalResponse(ok bool, str string, size uint64, checksum []byte) error {
 	resp := Response{Ok: ok, Message: str}
-	msg := RetrievalResponse{Resp: &resp, Size: size}
+	msg := RetrievalResponse{Resp: &resp, Size: size, Checksum: checksum}
 	wrapper := &Wrapper{
 		Msg: &Wrapper_RetrievalResp{RetrievalResp: &msg},
 	}
@@ -140,13 +140,13 @@ func (m *MessageHandler) ReceiveResponse() (bool, string) {
 	return resp.GetResponse().Ok, resp.GetResponse().Message
 }
 
-func (m *MessageHandler) ReceiveRetrievalResponse() (bool, string, uint64) {
+func (m *MessageHandler) ReceiveRetrievalResponse() (bool, string, uint64, []byte) {
 	resp, err := m.Receive()
 	if err != nil {
-		return false, "", 0
+		return false, "", 0, nil
 	}
 
 	rr := resp.GetRetrievalResp().GetResp()
 	log.Println(rr.Message)
-	return rr.Ok, rr.Message, resp.GetRetrievalResp().Size
+	return rr.Ok, rr.Message, resp.GetRetrievalResp().Size, resp.GetRetrievalResp().Checksum
 }

@@ -35,15 +35,13 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 	}
 
 	msgHandler.SendResponse(true, "Ready for data")
-	md5 := md5.New()
-	w := io.MultiWriter(file, md5)
+	md5Hash := md5.New()
+	w := io.MultiWriter(file, md5Hash)
 	io.CopyN(w, msgHandler, int64(request.Size)) /* Write and checksum as we go */
 	file.Close()
 
-	serverCheck := md5.Sum(nil)
-
-	clientCheckMsg, _ := msgHandler.Receive()
-	clientCheck := clientCheckMsg.GetChecksum().Checksum
+	serverCheck := md5Hash.Sum(nil)
+	clientCheck := request.Checksum
 
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully stored file.")
@@ -61,20 +59,23 @@ func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.Retr
 	info, err := os.Stat(request.FileName)
 	if err != nil {
 		log.Println(err)
-		msgHandler.SendRetrievalResponse(false, err.Error(), 0)
+		msgHandler.SendRetrievalResponse(false, err.Error(), 0, nil)
 		return
 	}
 
-	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()))
-
+	// Pre-compute checksum before transfer
 	file, _ := os.Open(request.FileName)
-	md5 := md5.New()
-	w := io.MultiWriter(msgHandler, md5)
-	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
+	md5Hash := md5.New()
+	io.Copy(md5Hash, file)
+	checksum := md5Hash.Sum(nil)
 	file.Close()
 
-	checksum := md5.Sum(nil)
-	msgHandler.SendChecksumVerification(checksum)
+	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()), checksum)
+
+	// Stream the file data
+	file, _ = os.Open(request.FileName)
+	io.CopyN(msgHandler, file, info.Size())
+	file.Close()
 }
 
 func handleClient(msgHandler *messages.MessageHandler) {

@@ -23,22 +23,26 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 		log.Fatalln(err)
 	}
 
-	// Tell the server we want to store this file (send only the base name)
-	msgHandler.SendStorageRequest(filepath.Base(fileName), uint64(info.Size()))
+	// Pre-compute checksum before transfer
+	file, _ := os.Open(fileName)
+	md5Hash := md5.New()
+	io.Copy(md5Hash, file)
+	checksum := md5Hash.Sum(nil)
+	file.Close()
+
+	// Tell the server we want to store this file (send only the base name + checksum)
+	msgHandler.SendStorageRequest(filepath.Base(fileName), uint64(info.Size()), checksum)
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
 
-	file, _ := os.Open(fileName)
-	md5 := md5.New()
-	w := io.MultiWriter(msgHandler, md5)
+	// Stream the file data
+	file, _ = os.Open(fileName)
 	start := time.Now()
-	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
+	io.CopyN(msgHandler, file, info.Size())
 	elapsed := time.Since(start)
 	file.Close()
 
-	checksum := md5.Sum(nil)
-	msgHandler.SendChecksumVerification(checksum)
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
@@ -59,21 +63,19 @@ func get(msgHandler *messages.MessageHandler, fileName string, dir string) int {
 	}
 
 	msgHandler.SendRetrievalRequest(fileName)
-	ok, _, size := msgHandler.ReceiveRetrievalResponse()
+	ok, _, size, serverCheck := msgHandler.ReceiveRetrievalResponse()
 	if !ok {
 		return 1
 	}
 
-	md5 := md5.New()
-	w := io.MultiWriter(file, md5)
+	md5Hash := md5.New()
+	w := io.MultiWriter(file, md5Hash)
 	start := time.Now()
 	io.CopyN(w, msgHandler, int64(size))
 	elapsed := time.Since(start)
 	file.Close()
 
-	clientCheck := md5.Sum(nil)
-	checkMsg, _ := msgHandler.Receive()
-	serverCheck := checkMsg.GetChecksum().Checksum
+	clientCheck := md5Hash.Sum(nil)
 
 	mbTransferred := float64(size) / 1_000_000.0
 	throughput := mbTransferred / elapsed.Seconds()
