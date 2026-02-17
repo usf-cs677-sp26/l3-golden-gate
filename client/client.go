@@ -44,10 +44,10 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	return 0
 }
 
-func get(msgHandler *messages.MessageHandler, fileName string) int {
+func get(msgHandler *messages.MessageHandler, fileName string, dir string) int {
 	fmt.Println("GET", fileName)
 
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	file, err := os.OpenFile(filepath.Join(dir, fileName), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Println(err)
 		return 1
@@ -112,6 +112,6 @@ func main() {
 	if action == "put" {
 		os.Exit(put(msgHandler, fileName))
 	} else if action == "get" {
-		os.Exit(get(msgHandler, fileName))
+		os.Exit(get(msgHandler, fileName, dir))
 	}
 }
