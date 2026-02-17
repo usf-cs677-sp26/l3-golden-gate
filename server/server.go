@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"syscall"
 )
 
 func handleStorage(msgHandler *messages.MessageHandler, request *messages.StorageRequest) {
@@ -16,6 +17,19 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 	file, err := os.OpenFile(request.FileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		msgHandler.SendResponse(false, err.Error())
+		msgHandler.Close()
+		return
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(".", &stat); err != nil {
+		msgHandler.SendResponse(false, "Could not check disk space")
+		msgHandler.Close()
+		return
+	}
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	if availableBytes < request.Size {
+		msgHandler.SendResponse(false, "Not enough disk space")
 		msgHandler.Close()
 		return
 	}
