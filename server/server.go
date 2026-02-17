@@ -83,7 +83,8 @@ func handleClient(msgHandler *messages.MessageHandler) {
 	for {
 		wrapper, err := msgHandler.Receive()
 		if err != nil {
-			log.Println(err)
+			log.Println("Client disconnected:", err)
+			return
 		}
 
 		switch msg := wrapper.Msg.(type) {
