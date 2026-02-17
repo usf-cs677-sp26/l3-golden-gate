@@ -33,8 +33,10 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully stored file.")
+		msgHandler.SendResponse(true, "File stored successfully")
 	} else {
 		log.Println("FAILED to store file. Invalid checksum.")
+		msgHandler.SendResponse(false, "Checksum mismatch")
 	}
 }
 
