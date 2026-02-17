@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func put(msgHandler *messages.MessageHandler, fileName string) int {
@@ -31,7 +32,9 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	file, _ := os.Open(fileName)
 	md5 := md5.New()
 	w := io.MultiWriter(msgHandler, md5)
+	start := time.Now()
 	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
+	elapsed := time.Since(start)
 	file.Close()
 
 	checksum := md5.Sum(nil)
@@ -40,7 +43,9 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 		return 1
 	}
 
-	fmt.Println("Storage complete!")
+	mbTransferred := float64(info.Size()) / 1_000_000.0
+	throughput := mbTransferred / elapsed.Seconds()
+	fmt.Printf("Storage complete! Transferred %.2f MB in %v (%.2f MB/s)\n", mbTransferred, elapsed, throughput)
 	return 0
 }
 
@@ -61,15 +66,19 @@ func get(msgHandler *messages.MessageHandler, fileName string, dir string) int {
 
 	md5 := md5.New()
 	w := io.MultiWriter(file, md5)
+	start := time.Now()
 	io.CopyN(w, msgHandler, int64(size))
+	elapsed := time.Since(start)
 	file.Close()
 
 	clientCheck := md5.Sum(nil)
 	checkMsg, _ := msgHandler.Receive()
 	serverCheck := checkMsg.GetChecksum().Checksum
 
+	mbTransferred := float64(size) / 1_000_000.0
+	throughput := mbTransferred / elapsed.Seconds()
 	if util.VerifyChecksum(serverCheck, clientCheck) {
-		log.Println("Successfully retrieved file.")
+		fmt.Printf("Successfully retrieved file. Transferred %.2f MB in %v (%.2f MB/s)\n", mbTransferred, elapsed, throughput)
 	} else {
 		log.Println("FAILED to retrieve file. Invalid checksum.")
 	}
