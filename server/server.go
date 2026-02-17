@@ -113,7 +113,6 @@ func main() {
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Fatalln(err.Error())
-		os.Exit(1)
 	}
 	defer listener.Close()
 
