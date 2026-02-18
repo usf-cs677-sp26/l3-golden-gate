@@ -28,6 +28,16 @@ To regenerate protobuf code:
 cd proto && bash build.sh
 ```
 
+## Performance
+
+Tested on **orion01** with `large-log.txt` (~1.2 GB):
+
+| Operation | File Size | Time | Throughput |
+|-----------|-----------|------|------------|
+| PUT | 1209.13 MB | 9.46s | 127.79 MB/s |
+| GET | 1209.13 MB | 9.42s | 128.35 MB/s |
+| **Average** | | **~9.5s** | ~128 MB/s |
+
 ## Bug Fixes
 
 1. **Server didn't respond after PUT checksum** — Client hung forever waiting for a response after file upload. Added `SendResponse` after checksum verification.
