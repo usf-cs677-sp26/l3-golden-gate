@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // CHANGE: compute PUT checksum before sending metadata request.
@@ -30,6 +31,7 @@ func computeFileChecksum(fileName string) ([]byte, error) {
 
 func put(msgHandler *messages.MessageHandler, fileName string) int {
 	fmt.Println("PUT", fileName)
+	start := time.Now()
 
 	// Get file size and make sure it exists
 	info, err := os.Stat(fileName)
@@ -71,11 +73,14 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	}
 
 	fmt.Println("Storage complete!")
+	elapsed := time.Since(start).Seconds()
+	log.Printf("PUT completed in %.3f seconds\n", elapsed)
 	return 0
 }
 
 func get(msgHandler *messages.MessageHandler, fileName string, destinationDir string) int {
 	fmt.Println("GET", fileName)
+	start := time.Now()
 
 	remoteName := filepath.Base(fileName)
 	if err := msgHandler.SendRetrievalRequest(remoteName); err != nil {
@@ -109,6 +114,8 @@ func get(msgHandler *messages.MessageHandler, fileName string, destinationDir st
 	// CHANGE: verify against checksum from retrieval metadata; no trailing checksum message.
 	clientCheck := md5.Sum(nil)
 	if util.VerifyChecksum(expectedChecksum, clientCheck) {
+		elapsed := time.Since(start).Seconds()
+		log.Printf("GET completed in %.3f seconds\n", elapsed)
 		log.Println("Successfully retrieved file:", outputPath)
 		return 0
 	} else {
