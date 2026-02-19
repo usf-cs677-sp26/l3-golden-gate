@@ -39,7 +39,7 @@ The server now treats uploads as a single atomic operation:
 This prevents corrupted or incomplete files from being left on the server.
 
 ---
-# Improved GET (Download) Behavior
+# Improved GET Behavior
 
 The GET flow was also restructured to be safer:
 
